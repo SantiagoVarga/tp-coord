@@ -53,9 +53,9 @@ class Message:
             msg.correlation_id = data.get("correlation_id")
             return msg
         except KeyError as e:
-            raise MessageError(f"Campo requerido faltante en mensaje: {e}")
+            raise MessageError(f"Required field missing in message: {e}")
         except ValueError as e:
-            raise MessageError(f"msg_type inválido: {e}")
+            raise MessageError(f"Invalid msg_type: {e}")
 
 
 def serialize(message):
@@ -67,13 +67,13 @@ def serialize(message):
         json_str = json.dumps(data,default=str)
         return json_str.encode("utf-8")
     except (TypeError, ValueError) as e:
-        raise MessageError(f"Error al serializar mensaje: {e}")
+        raise MessageError(f"Error serializing message: {e}")
 
 
 def deserialize(message_bytes):
     try:
         if not isinstance(message_bytes, bytes):
-            raise MessageError("El mensaje a deserializar debe ser de tipo bytes")
+            raise MessageError("The message to deserialize must be of type bytes")
         data = json.loads(message_bytes.decode("utf-8"))
 
         if isinstance(data, dict) and "message_type" in data and "payload" in data:
@@ -81,7 +81,7 @@ def deserialize(message_bytes):
         else: 
             return data
     except (json.JSONDecodeError, MessageError) as e:
-        raise MessageError(f"Error al deserializar mensaje: {e}")
+        raise MessageError(f"Error deserializing message: {e}")
     
 def _create_message(message_type: MessageType, payload: Any, client_id: str, correlation_id: Optional[str] = None):
     msg = Message(message_type=message_type, payload=payload)

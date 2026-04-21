@@ -269,7 +269,6 @@ class SumWorker:
         self.logger.info(f"Starting SumWorker {self.sum_id}")
         
         try:
-            # Start consuming - BLOCKING until stop_consuming() called
             self.filter.start()
             
             self.logger.info(f"SumWorker {self.sum_id} finished")
