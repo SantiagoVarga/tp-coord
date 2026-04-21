@@ -4,7 +4,7 @@ import bisect
 import signal
 from collections import defaultdict
 from threading import Lock
-from common import middleware,  fruit_item
+from common import middleware, fruit_item
 
 from gateway.message_handler.message_handler import MessageHandler
 from common.message_protocol.internal import MessageError, MessageType
@@ -25,7 +25,7 @@ JOINER_COORDINATION_QUEUE = "JOINER_COORDINATION_QUEUE"
 
 class AggregationFilter:
 
-    def __init__(self,message_handler):
+    def __init__(self, message_handler):
         self.input_exchange = middleware.MessageMiddlewareExchangeRabbitMQ(
             MOM_HOST,
             AGGREGATION_PREFIX,
@@ -48,6 +48,7 @@ class AggregationFilter:
         self.completed_clients = set()  
         self.finalizing_clients = set()
         self.lock = Lock()
+        self.logger = logging.getLogger(f"AggregationFilter{ID}")
 
     def _process_data(self, fruit, amount, client_id, message_id=None):
         with self.lock:
@@ -59,7 +60,7 @@ class AggregationFilter:
                 self.received_partial_sums_by_client[client_id].add(message_id)
             if client_id not in self.fruit_top_by_client:
                 self.fruit_top_by_client[client_id] = []
-                logging.info(f"New client stream [client={client_id}] on Aggregation {ID}")
+                self.logger.info(f"New client stream [client={client_id}] on Aggregation {ID}")
             
             fruit_list = self.fruit_top_by_client[client_id]
             
@@ -75,7 +76,7 @@ class AggregationFilter:
             
 
     def _process_eof(self, client_id, source_id=None):
-        logging.info(f"Received EOF [client={client_id}]")
+        self.logger.info(f"Received EOF [client={client_id}]")
         with self.lock:
             if client_id in self.completed_clients:
                 return
@@ -91,7 +92,7 @@ class AggregationFilter:
 
         if should_send:
             self._send_top(client_id)
-            logging.info(f"Finished processing client stream [client={client_id}] on Aggregation {ID}")
+            self.logger.info(f"Finished processing client stream [client={client_id}] on Aggregation {ID}")
         self.received_eofs_by_client[client_id].add(source_id)
         
 
@@ -102,7 +103,7 @@ class AggregationFilter:
             self.finalizing_clients.add(client_id)
             fruit_list = list(self.fruit_top_by_client.get(client_id, []))
             if not fruit_list:
-                logging.warning(f"No fruit data for [client={client_id}]")
+                self.logger.warning(f"No fruit data for [client={client_id}]")
                 
 
             top_items = sorted(fruit_list, key= lambda item: (item.amount, item.fruit), reverse=True)[:TOP_SIZE]
@@ -116,7 +117,7 @@ class AggregationFilter:
                     correlation_id=str(ID),
                 )
             )
-            logging.info(f"Sent partial top for [client={client_id}] with {len(payload)} items")
+            self.logger.info(f"Sent partial top for [client={client_id}] with {len(payload)} items")
             self._send_coordination(client_id)
         except Exception:
             with self.lock:
@@ -141,14 +142,14 @@ class AggregationFilter:
                 correlation_id=str(ID),
             )
         )
-        logging.info(f"Sent coordination message to Join [client={client_id}]")
+        self.logger.info(f"Sent coordination message to Join [client={client_id}]")
 
-    def process_messsage(self, message, ack, nack):
+    def process_message(self, message, ack, nack):
         try:
             msg_obj = self.message_handler.deserialize_sum_message(message)
 
             if msg_obj is None:
-                logging.warning("Received empty message, ignoring")
+                self.logger.warning("Received empty message, ignoring")
                 ack()
                 return
             client_id = msg_obj.client_id
@@ -157,41 +158,41 @@ class AggregationFilter:
                     raise MessageError(f"Invalid DATA payload: {msg_obj.payload}")
                 
                 fruit, amount = msg_obj.payload
-                logging.debug(
+                self.logger.debug(
                     f"Aggregation {ID} received {msg_obj.message_type.value} [{fruit}, {amount}] [client={client_id}]"
                 )
                 self._process_data(fruit, amount, client_id, msg_obj.correlation_id)
             elif msg_obj.message_type == MessageType.EOF:
-                logging.debug(f"Aggregation {ID} received EOF [client={client_id}]")
+                self.logger.debug(f"Aggregation {ID} received EOF [client={client_id}]")
                 self._process_eof(client_id, msg_obj.correlation_id)
             else:
-                logging.warning(f"Received unexpected message type: {msg_obj.message_type} [client={client_id}]")
+                self.logger.warning(f"Received unexpected message type: {msg_obj.message_type} [client={client_id}]")
             ack()
         except MessageError as e:
-            logging.error(f"Message processing error: {e}")
+            self.logger.error(f"Message processing error: {e}")
             nack()
             
 
     def start(self):
         def on_message(message, ack, nack):
-            self.process_messsage(message, ack, nack)
+            self.process_message(message, ack, nack)
         self.input_exchange.start_consuming(on_message)
 
     def close(self):
         try:
             self.input_exchange.close()
         except Exception as e:
-            logging.error(f"Error closing input_exchange: {e}")
+            self.logger.error(f"Error closing input_exchange: {e}")
 
         try:
             self.output_queue.close()
         except Exception as e:
-            logging.error(f"Error closing output_queue: {e}")
+            self.logger.error(f"Error closing output_queue: {e}")
 
         try:
             self.joiner_coordination_queue.close()
         except Exception as e:
-            logging.error(f"Error closing joiner_coordination_queue: {e}")
+            self.logger.error(f"Error closing joiner_coordination_queue: {e}")
 
 
 class AggregationWorker:
@@ -200,13 +201,11 @@ class AggregationWorker:
         self.message_handler = MessageHandler()
         self.filter = AggregationFilter(message_handler=self.message_handler)
         self.logger = logging.getLogger(f"AggregationWorker{self.agg_id}")
-        self.should_stop = False
         self._setup_signal_handlers()
         
     def _setup_signal_handlers(self):
         def signal_handler(sig, frame):
             self.logger.info(f"Received signal {sig}, shutting down AggregationWorker{self.agg_id}")
-            self.should_stop = True
             try:
                 self.filter.close()
             except Exception as e:
@@ -230,10 +229,7 @@ class AggregationWorker:
             self.logger.info(f"AggregationWorker {self.agg_id} cleaning up")
             self.filter.close()
 
-    def _broadcast_coordination_message(self):
-        self.logger.info(f"AggregationWorker{self.agg_id} broadcasting coordination message")
-        self.joiner_coordination_queue.send(self.message_handler.serialize_coordination(ALL_SUMS_FINISHED, self.agg_id))        
-
+    
 def main():
     logging.basicConfig(level=logging.INFO)
     aggregation_worker = AggregationWorker(ID)

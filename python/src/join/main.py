@@ -6,11 +6,10 @@ import sys
 import time
 from threading import Lock
 
-from common import fruit_item
 from common.middleware import MessageMiddlewareQueueRabbitMQ
 from common.middleware.middleware import (MessageMiddlewareDisconnectedError)
 
-from common.message_protocol.internal import deserialize, Message, MessageType, serialize
+from common.message_protocol.internal import  Message, MessageType
 from gateway.message_handler.message_handler import MessageHandler
 
 MOM_HOST = os.environ["MOM_HOST"]
@@ -41,9 +40,14 @@ class JoinFilter:
         self.completed_clients = set()
         self.finalizing_clients = set()
         self.lock = Lock()
+        self.logger = logging.getLogger("JoinFilter")
+
+    def get_aggs_received_count(self, client_id):
+        return len(self.aggs_received_by_client.get(client_id, set()))
+
     
     def _process_partial_top(self, fruit_top, client_id, source_id=None):
-        logging.info(f"Processing partial top with {len(fruit_top)} items [client={client_id}]")
+        self.logger.info(f"Processing partial top with {len(fruit_top)} items [client={client_id}]")
         with self.lock:
             if client_id in self.completed_clients:
                 return
@@ -59,7 +63,7 @@ class JoinFilter:
             self.aggs_received_by_client[client_id].add(source_key)
     
     def _send_final_top(self, client_id):
-        logging.info(f"All {AGGREGATION_AMOUNT} partial tops received, computing final top [client={client_id}]")
+        self.logger.info(f"All {AGGREGATION_AMOUNT} partial tops received, computing final top [client={client_id}]")
         with self.lock:
             if client_id in self.completed_clients or client_id in self.finalizing_clients:
                 return
@@ -98,32 +102,32 @@ class JoinFilter:
                 client_id = deserialized.client_id
                 if deserialized.message_type == MessageType.PARTIAL_TOP:
                     payload = deserialized.payload
-                    logging.info(f"Received PARTIAL_TOP with {len(payload)} items [client={client_id}]")
+                    self.logger.info(f"Received PARTIAL_TOP with {len(payload)} items [client={client_id}]")
                     if isinstance(payload, list):
                         self._process_partial_top(payload, client_id, deserialized.correlation_id)
                 else:
-                    logging.warning(f"Unexpected message type: {deserialized.message_type} [client={client_id}]")
+                    self.logger.warning(f"Unexpected message type: {deserialized.message_type} [client={client_id}]")
             else:
                 fruit_top = deserialized
-                logging.info(f"Received partial top (legacy format) with {len(fruit_top)} items")
+                self.logger.info(f"Received partial top (legacy format) with {len(fruit_top)} items")
                 if isinstance(fruit_top, list):
                     self._process_partial_top(fruit_top, "unknown")
             
             ack()
         except Exception as e:
-            logging.error(f"Error processing message: {e}")
+            self.logger.error(f"Error processing message: {e}")
             nack()
 
     def close(self):
         try:
             self.input_queue.close()
         except Exception as e:
-            logging.error(f"Error closing input queue: {e}")
+            self.logger.error(f"Error closing input queue: {e}")
         
         try:
             self.output_queue.close()
         except Exception as e:
-            logging.error(f"Error closing output queue: {e}")
+            self.logger.error(f"Error closing output queue: {e}")
 
     def start(self):
         self.input_queue.start_consuming(self.process_message)
@@ -169,9 +173,19 @@ class JoinWorker:
 
     def _join_listener_threads(self):
         if self.data_thread is not None:
-            self.data_thread.join()
+            try:
+                self.data_thread.join(timeout=5)
+                if self.data_thread.is_alive():
+                    self.logger.warning("Data listener thread did not exit within timeout")
+            except Exception as e:
+                self.logger.error(f"Error joining data thread: {e}")
         for thread in self.coordination_threads:
-            thread.join()
+            try:
+                thread.join(timeout=5)
+                if thread.is_alive():
+                    self.logger.warning(f"Coordination listener thread {thread.name} did not exit within timeout")
+            except Exception as e:
+                self.logger.error(f"Error joining coordination thread {thread.name}: {e}")
     
     def _setup_signal_handlers(self):
         def handle_sigterm(signum, frame):
@@ -288,10 +302,10 @@ class JoinWorker:
             with self.lock:
                 for client_id in list(self.coordination_ready_by_client.keys()):
                     if self.coordination_ready_by_client[client_id] and \
-                        len(self.filter.aggs_received_by_client.get(client_id, set())) >= AGGREGATION_AMOUNT:
+                        self.filter.get_aggs_received_count(client_id) >= AGGREGATION_AMOUNT:
                         clients_to_send.append(client_id)
                         self.coordination_ready_by_client.pop(client_id, None)
-                    self.logger.info(f"Monitoring completion: {len(self.coordination_ready_by_client)} clients ready, {len(clients_to_send)} clients to send final top")
+                self.logger.info(f"Monitoring completion: {len(self.coordination_ready_by_client)} clients ready, {len(clients_to_send)} clients to send final top")
 
             for client_id in clients_to_send:
                 try:
@@ -301,6 +315,7 @@ class JoinWorker:
                         self.coordination_ready_by_client[client_id] = True
 
             time.sleep(0.1)
+    
 
 
 def main():
