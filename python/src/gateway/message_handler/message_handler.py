@@ -1,10 +1,8 @@
 from common import message_protocol
 import logging
 from typing import Any, Optional, Dict, List
-from collections import defaultdict
 import uuid
 
-from common import message_protocol
 from common.message_protocol.internal import (
     Message, MessageType, MessageError, serialize, deserialize
 )
@@ -20,8 +18,7 @@ class MessageHandler:
 
     def __init__(self):
         self.client_id = str(uuid.uuid4())
-        self.client_queues_in = dict()
-        self.client_queues_out = dict()
+        
 
         logger.info("MessageHandler initialized")
     
@@ -50,10 +47,7 @@ class MessageHandler:
         try:
             target_client_id = self.client_id if client_id is None else client_id
             logger.debug(f"Serializando EOF [client={target_client_id}]")
-            msg = Message(message_type=MessageType.EOF, payload=[])
-            msg.client_id = target_client_id
-            msg.correlation_id = correlation_id
-            return serialize(msg)
+            return message_protocol.internal.serialize_eof(target_client_id, correlation_id)
         
         except Exception as e:
             logger.error(f"Error serializando EOF: {e}")
@@ -62,10 +56,7 @@ class MessageHandler:
 
     def serialize_sum_message(self, message, client_id, correlation_id: Optional[str] = None):
         try:
-            msg = Message(message_type=MessageType.PARTIAL_SUM, payload=message)
-            msg.client_id = client_id
-            msg.correlation_id = correlation_id
-            return serialize(msg)
+            return message_protocol.internal.serialize_partial_sum(message, client_id, correlation_id)
         except MessageError as e:
             logger.error(f"Error al serializar mensaje: {e}")
             raise
@@ -76,10 +67,8 @@ class MessageHandler:
 
     def serialize_partial_top(self, message, client_id, correlation_id: Optional[str] = None):
         try:
-            msg = Message(message_type=MessageType.PARTIAL_TOP, payload=message)
-            msg.client_id = client_id
-            msg.correlation_id = correlation_id
-            return serialize(msg)
+            
+            return message_protocol.internal.serialize_partial_top(message, client_id, correlation_id)
         except MessageError as e:
             logger.error(f"Error al serializar mensaje: {e}")
             raise
@@ -89,10 +78,7 @@ class MessageHandler:
         
     def serialize_final_top(self, message, client_id, correlation_id: Optional[str] = None):
         try:
-            msg = Message(message_type=MessageType.FINAL_TOP, payload=message)
-            msg.client_id = client_id
-            msg.correlation_id = correlation_id
-            return serialize(msg)
+            return message_protocol.internal.serialize_final_top(message, client_id, correlation_id)
         except MessageError as e:
             logger.error(f"Error al serializar mensaje: {e}")
             raise
@@ -102,89 +88,58 @@ class MessageHandler:
         
     def serialize_coordination(self, signal, client_id, correlation_id: Optional[str] = None):
         try:
-            msg = Message(message_type=MessageType.COORDINATION, payload=signal)
-            msg.client_id = client_id
-            msg.correlation_id = correlation_id
-            return serialize(msg)
+            return message_protocol.internal.serialize_coordination(signal, client_id, correlation_id)
         except MessageError as e:
             logger.error(f"Error al serializar mensaje: {e}")
             raise
         except Exception as e:
             logger.error(f"Error inesperado al serializar mensaje: {e}")
             raise MessageError(f"Error inesperado al serializar mensaje: {e}")
-
-    def deserialize_sum_message(self, message):
-        try:
-            deserialized = message_protocol.internal.deserialize(message)
-
-            if isinstance(deserialized, Message):
-                if deserialized.message_type not in (MessageType.PARTIAL_SUM, MessageType.EOF):
-                    logger.warning(
-                        f"Se esperaba PARTIAL_SUM o EOF, obtuvo {deserialized.message_type.value}"
-                    )
-                return deserialized
-
-            logger.debug(f"Deserializado mensaje parcial de suma (legacy): {deserialized}")
-            return deserialized
-
-        except MessageError as e:
-            logger.error(f"Error deserializando mensaje parcial de suma: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error inesperado deserializando mensaje parcial de suma: {e}")
-            raise MessageError(f"Error deserializando mensaje parcial de suma: {e}")
-
-
-    def deserialize_data_message(self, message):
+        
+    def _deserialize_and_validate(self, message: bytes, expected_type: MessageType, 
+                              allow_types: Optional[List[MessageType]] = None):
         try:
             deserialized = message_protocol.internal.deserialize(message)
             
             if isinstance(deserialized, Message):
-                if deserialized.message_type != MessageType.DATA:
+                types_to_check = allow_types if allow_types else [expected_type]
+                if deserialized.message_type not in types_to_check:
                     logger.warning(
-                        f"Se esperaba DATA, obtuvo {deserialized.message_type.value}"
+                        f"Se esperaba {expected_type.value}, obtuvo {deserialized.message_type.value}"
                     )
-                payload = deserialized.payload
-                client_id = deserialized.client_id
-                logger.debug(f"Deserializado DATA: {payload} [client={client_id}]")
                 return deserialized
-            
             else:
                 logger.debug(f"Deserializado mensaje (legacy): {deserialized}")
                 return deserialized
         
         except MessageError as e:
-            logger.error(f"Error deserializando mensaje: {e}")
+            logger.error(f"Error deserializando {expected_type.value}: {e}")
             raise
         except Exception as e:
-            logger.error(f"Error inesperado deserializando mensaje: {e}")
-            raise MessageError(f"Error inesperado deserializando mensaje: {e}")
+            logger.error(f"Error inesperado deserializando {expected_type.value}: {e}")
+            raise MessageError(f"Error deserializando {expected_type.value}: {e}")
+        
+    def deserialize_sum_message(self, message):
+        return self._deserialize_and_validate(
+            message, 
+            MessageType.PARTIAL_SUM,
+            allow_types=[MessageType.PARTIAL_SUM, MessageType.EOF]
+        )
+
+    def deserialize_data_message(self, message):
+        return self._deserialize_and_validate(message, MessageType.DATA)
 
     def deserialize_control_message(self, message):
-        try:
-            deserialized = message_protocol.internal.deserialize(message)
-            
-            if isinstance(deserialized, Message):
-                if deserialized.message_type != MessageType.EOF:
-                    logger.warning(
-                        f"Se esperaba EOF, obtuvo {deserialized.message_type.value}"
-                    )
-                payload = deserialized.payload
-                client_id = deserialized.client_id
-                logger.debug(f"Deserializado control EOF: {payload} [client={client_id}]")
-                return deserialized
-            
-            else:
-                logger.debug(f"Deserializado mensaje de control (legacy): {deserialized}")
-                return deserialized
-        
-        except MessageError as e:
-            logger.error(f"Error deserializando mensaje de control: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error inesperado deserializando mensaje de control: {e}")
-            raise MessageError(f"Error inesperado deserializando mensaje de control: {e}")
+        return self._deserialize_and_validate(message, MessageType.EOF)
 
+    def deserialize_partial_top_message(self, message):
+        return self._deserialize_and_validate(message, MessageType.PARTIAL_TOP)
+
+    def deserialize_coordination_message(self, message):
+        return self._deserialize_and_validate(message, MessageType.COORDINATION)
+
+   
+    # Comportamiento diferente al resto de deserializadores
     def deserialize_result_message(self, message):
         try:
             deserialized = message_protocol.internal.deserialize(message)
@@ -222,44 +177,4 @@ class MessageHandler:
             logger.error(f"Error inesperado deserializando: {e}")
             raise MessageError(f"Error deserializando resultado: {e}")
         
-    def deserialize_partial_top_message(self, message):
-        try:
-            deserialized = message_protocol.internal.deserialize(message)
-            
-            if isinstance(deserialized, Message):
-                if deserialized.message_type != MessageType.PARTIAL_TOP:
-                    logger.warning(
-                        f"Se esperaba PARTIAL_TOP, obtuvo {deserialized.message_type.value}"
-                    )
-                return deserialized
-            else:
-                logger.debug(f"Deserializado resultado (legacy): {len(deserialized)} items")
-                return deserialized
-        
-        except MessageError as e:
-            logger.error(f"Error deserializando resultado: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error inesperado deserializando: {e}")
-            raise MessageError(f"Error deserializando resultado: {e}")
     
-    def deserialize_coordination_message(self, message):
-        try:
-            deserialized = message_protocol.internal.deserialize(message)
-            
-            if isinstance(deserialized, Message):
-                if deserialized.message_type != MessageType.COORDINATION:
-                    logger.warning(
-                        f"Se esperaba COORDINATION, obtuvo {deserialized.message_type.value}"
-                    )
-                return deserialized
-            else:
-                logger.debug(f"Deserializado mensaje de coordinación (legacy): {deserialized}")
-                return deserialized
-        
-        except MessageError as e:
-            logger.error(f"Error deserializando mensaje de coordinación: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Error inesperado deserializando mensaje de coordinación: {e}")
-            raise MessageError(f"Error deserializando mensaje de coordinación: {e}")

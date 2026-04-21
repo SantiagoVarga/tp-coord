@@ -2,8 +2,6 @@ import json
 import logging
 from enum import Enum
 from typing import Any, Dict, Optional, List, Union
-from dataclasses import dataclass, asdict
-from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +24,6 @@ class MessageType(Enum):
 
     # Coordination
     COORDINATION = "COORDINATION"
-    ERROR = "ERROR"
-    HEARTBEAT = "HEARTBEAT"
 
 class MessageError(Exception):
     pass
@@ -36,7 +32,6 @@ class Message:
     def __init__(self, message_type: MessageType, payload: Optional[Union[Dict[str, Any], List[Any]]] = None):
         self.message_type = message_type
         self.payload = payload 
-        self.timestamp = datetime.now().isoformat()
         self.client_id = None 
         self.correlation_id = None
 
@@ -44,7 +39,6 @@ class Message:
         return {
             "message_type": self.message_type.value,
             "payload": self.payload,
-            "timestamp": self.timestamp,
             "client_id": self.client_id,
             "correlation_id": self.correlation_id
         }
@@ -55,8 +49,6 @@ class Message:
             msg_type = MessageType(data["message_type"])
             msg = Message(message_type=msg_type, 
                            payload=data.get("payload"))
-            if "timestamp" in data:
-                msg.timestamp = data.get("timestamp")
             msg.client_id = data.get("client_id")
             msg.correlation_id = data.get("correlation_id")
             return msg
@@ -91,52 +83,26 @@ def deserialize(message_bytes):
     except (json.JSONDecodeError, MessageError) as e:
         raise MessageError(f"Error al deserializar mensaje: {e}")
     
-def serialize_data(payload,client_id):
-    msg = Message(message_type= MessageType.DATA,
-                  payload=payload)
+def _create_message(message_type: MessageType, payload: Any, client_id: str, correlation_id: Optional[str] = None):
+    msg = Message(message_type=message_type, payload=payload)
     msg.client_id = client_id
+    msg.correlation_id = correlation_id
     return serialize(msg)
 
-def serialize_eof(client_id):
-    msg = Message(message_type = MessageType.EOF,
-                  payload = [])
-    msg.client_id = client_id
-    return serialize(msg)
+def serialize_data(payload, client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.DATA, payload, client_id, correlation_id)
 
-def serialize_partial_sum(payload, client_id):
-    msg = Message(
-        message_type=MessageType.PARTIAL_SUM,
-        payload=payload)
-    msg.client_id = client_id
-    return serialize(msg)
+def serialize_eof(client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.EOF, [], client_id, correlation_id)
 
+def serialize_partial_sum(payload, client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.PARTIAL_SUM, payload, client_id, correlation_id)
 
-def serialize_partial_top(payload, client_id):
-    msg = Message(
-        message_type=MessageType.PARTIAL_TOP,
-        payload=payload)
-    msg.client_id = client_id
-    return serialize(msg)
+def serialize_partial_top(payload, client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.PARTIAL_TOP, payload, client_id, correlation_id)
 
-def serialize_final_top(payload, client_id):
-    msg = Message(
-        message_type=MessageType.FINAL_TOP,
-        payload=payload)
-    msg.client_id = client_id
-    return serialize(msg)
+def serialize_final_top(payload, client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.FINAL_TOP, payload, client_id, correlation_id)
 
-
-def serialize_coordination(signal, client_id) :
-    msg = Message(
-        message_type=MessageType.COORDINATION,
-        payload=signal)
-    msg.client_id = client_id
-    return serialize(msg)
-
-
-def serialize_error(error_msg, client_id):
-    msg = Message(
-        message_type=MessageType.ERROR,
-        payload={'error': error_msg})
-    msg.client_id = client_id
-    return serialize(msg)
+def serialize_coordination(signal, client_id, correlation_id: Optional[str] = None):
+    return _create_message(MessageType.COORDINATION, signal, client_id, correlation_id)

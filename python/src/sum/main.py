@@ -9,7 +9,7 @@ import threading
 from collections import defaultdict
 
 from common import middleware, fruit_item
-from common.message_protocol.internal import Message,MessageError, MessageType, deserialize
+from common.message_protocol.internal import Message,MessageError, MessageType
 from gateway.message_handler.message_handler import MessageHandler
 
 ID = int(os.environ["ID"])
@@ -45,6 +45,7 @@ class SumFilter:
         self.finished_clients = set()
         self.finalizing_clients = set()
         self.lock = Lock()
+        self.logger = logging.getLogger("SumFilter")
 
     def _target_aggregation_index(self, fruit):
         return zlib.crc32(fruit.encode("utf-8")) % AGGREGATION_AMOUNT
@@ -55,7 +56,7 @@ class SumFilter:
                 return
             if client_id not in self.amount_by_fruit_by_client:
                 self.amount_by_fruit_by_client[client_id] = {}
-                logging.info(f"New client data stream [client={client_id}]")
+                self.logger.info(f"New client data stream [client={client_id}]")
             
             fruits_dict = self.amount_by_fruit_by_client[client_id]
             
@@ -78,7 +79,7 @@ class SumFilter:
             self.finalizing_clients.add(client_id)
             fruits_dict = dict(self.amount_by_fruit_by_client.get(client_id, {}))
 
-        logging.info(f"Broadcasting {len(fruits_dict)} aggregated items to Aggregations [client={client_id}]")
+        self.logger.info(f"Broadcasting {len(fruits_dict)} aggregated items to Aggregations [client={client_id}]")
 
         try:
             for final_fruit_item in fruits_dict.values():
@@ -93,7 +94,7 @@ class SumFilter:
                     )
                 )
 
-            logging.info(f"Broadcasting EOF to Aggregations [client={client_id}]")
+            self.logger.info(f"Broadcasting EOF to Aggregations [client={client_id}]")
             for data_output_exchange in self.data_output_exchanges:
                  data_output_exchange.send(
                     self.message_handler.serialize_eof_message(
@@ -133,7 +134,7 @@ class SumFilter:
 
             
 
-    def process_data_messsage(self, message, ack, nack):
+    def process_data_message(self, message, ack, nack):
         try:
             msg_obj = self.message_handler.deserialize_data_message(message)
             
@@ -154,7 +155,7 @@ class SumFilter:
                         raise MessageError(f"Invalid DATA payload: {msg_obj.payload}")
                     
                     fruit, amount = msg_obj.payload
-                    logging.debug(f"Sum {ID} received DATA [{fruit}, {amount}] [client={client_id}]")
+                    self.logger.debug(f"Sum {ID} received DATA [{fruit}, {amount}] [client={client_id}]")
                     self._process_data(fruit, amount, client_id)
                 finally:
                     with self.lock:
@@ -163,14 +164,14 @@ class SumFilter:
                             self.active_data_messages_by_client.pop(client_id, None)
             
             elif msg_obj.message_type == MessageType.EOF:
-                logging.info(f"Sum {ID} received EOF [client={client_id}]")
+                self.logger.info(f"Sum {ID} received EOF [client={client_id}]")
                 self._process_eof(client_id)
             else:
-                logging.warning(f"Sum {ID} received unknown message type: {msg_obj.message_type} [client={client_id}]")
+                self.logger.warning(f"Sum {ID} received unknown message type: {msg_obj.message_type} [client={client_id}]")
             ack()
         
         except Exception as e:
-            logging.error(f"Error processing message on Sum {ID}: {e}")
+            self.logger.error(f"Error processing message on Sum {ID}: {e}")
             nack()
 
 
@@ -185,18 +186,18 @@ class SumFilter:
             client_id = msg_obj.client_id
             
             if msg_obj.message_type == MessageType.EOF:
-                logging.info(f"Sum {ID} received control EOF [client={client_id}]")
+                self.logger.info(f"Sum {ID} received control EOF [client={client_id}]")
                 self._process_eof(client_id, from_control=True)
             
             ack()
         
         except Exception as e:
-            logging.error(f"Error processing control message on Sum {ID}: {e}")
+            self.logger.error(f"Error processing control message on Sum {ID}: {e}")
             nack()
 
     def start(self):
         def on_data_message(message, ack, nack):
-            self.process_data_messsage(message, ack, nack)
+            self.process_data_message(message, ack, nack)
         def on_control_message(message, ack, nack):
             self.process_control_message(message, ack, nack)
         data_thread = threading.Thread(
@@ -220,31 +221,31 @@ class SumFilter:
         try:
             self.input_queue.stop_consuming()
         except Exception as e:
-            logging.error(f"Error stopping input queue consumption: {e}")
+            self.logger.error(f"Error stopping input queue consumption: {e}")
         try:
             self.control_input_exchange.stop_consuming()
         except Exception as e:
-            logging.error(f"Error stopping control input exchange consumption: {e}")
+            self.logger.error(f"Error stopping control input exchange consumption: {e}")
      
     
     def close(self):
         try:
             self.input_queue.close()
         except Exception as e:
-            logging.error(e)
+            self.logger.error(f"Error closing input queue: {e}")
         try:
             self.control_input_exchange.close()
         except Exception as e:
-            logging.error(e)
+            self.logger.error(f"Error closing control input exchange: {e}")
         try:
             self.control_output_exchange.close()
         except Exception as e:
-            logging.error(e)
+            self.logger.error(f"Error closing control output exchange: {e}")
         for i, exchange in enumerate(self.data_output_exchanges):
             try:
                 exchange.close()
             except Exception as e:
-                logging.error(e)
+                self.logger.error(f"Error closing data output exchange {i}: {e}")
 
 class SumWorker:
     def __init__(self, sum_id):
@@ -252,15 +253,12 @@ class SumWorker:
         self.message_handler = MessageHandler()
         self.filter = SumFilter(self.message_handler)
         self.logger = logging.getLogger(f"SumWorker{sum_id}")
-        self.should_stop = False
-        self.sums_finished = 0
         self._setup_signal_handlers()
 
     
     def _setup_signal_handlers(self):
         def handle_signal(signum, frame):
             self.logger.info(f"Received signal {signum}, shutting down SumWorker {self.sum_id}")
-            self.should_stop = True
             try:
                 self.filter.stop()
             except Exception as e:
