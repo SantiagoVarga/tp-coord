@@ -45,6 +45,7 @@ class SumFilter:
         self.finished_clients = set()
         self.finalizing_clients = set()
         self.lock = Lock()
+        self.should_exit = False
         self.logger = logging.getLogger("SumFilter")
 
     def _target_aggregation_index(self, fruit):
@@ -112,6 +113,7 @@ class SumFilter:
             self.finalizing_clients.discard(client_id)
             self.finished_clients.add(client_id)
             self.amount_by_fruit_by_client.pop(client_id, None)
+            self.active_data_messages_by_client.pop(client_id, None)
         
         return True
 
@@ -214,8 +216,10 @@ class SumFilter:
         )
         data_thread.start()
         control_thread.start()
-        data_thread.join()
-        control_thread.join()
+
+        while not self.should_exit:
+            data_thread.join()
+            control_thread.join()
 
     def stop(self):
         try:
@@ -229,6 +233,7 @@ class SumFilter:
      
     
     def close(self):
+        self.should_exit = True
         try:
             self.input_queue.close()
         except Exception as e:
@@ -259,6 +264,7 @@ class SumWorker:
     def _setup_signal_handlers(self):
         def handle_signal(signum, frame):
             self.logger.info(f"Received signal {signum}, shutting down SumWorker {self.sum_id}")
+            self.filter.should_exit = True
             try:
                 self.filter.stop()
             except Exception as e:

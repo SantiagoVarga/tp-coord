@@ -428,7 +428,7 @@ Cada componente (Sum, Aggregation, Join) es fundamentalmente **I/O-bound**:
 
 ### 5. Manejo de Señales y Shutdown Ordenado
 
-Todos los worker processes implementan signal handlers para shutdown limpio:
+Todos los worker processes implementan signal handlers para un **graceful shutdown**:
 
 ```python
 def _setup_signal_handlers(self):

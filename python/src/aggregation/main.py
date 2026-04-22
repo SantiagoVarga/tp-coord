@@ -48,6 +48,7 @@ class AggregationFilter:
         self.completed_clients = set()  
         self.finalizing_clients = set()
         self.lock = Lock()
+        self.should_exit = False
         self.logger = logging.getLogger(f"AggregationFilter{ID}")
 
     def _process_data(self, fruit, amount, client_id, message_id=None):
@@ -145,6 +146,9 @@ class AggregationFilter:
         self.logger.info(f"Sent coordination message to Join [client={client_id}]")
 
     def process_message(self, message, ack, nack):
+        if self.should_exit:
+            ack()
+            return
         try:
             msg_obj = self.message_handler.deserialize_sum_message(message)
 
@@ -178,7 +182,15 @@ class AggregationFilter:
             self.process_message(message, ack, nack)
         self.input_exchange.start_consuming(on_message)
 
+    def stop(self):
+        self.should_exit = True
+        try:
+            self.input_exchange.stop_consuming()
+        except Exception as e:
+            self.logger.error(f"Error stopping input_exchange: {e}")
+
     def close(self):
+        self.should_exit = True
         try:
             self.input_exchange.close()
         except Exception as e:
@@ -206,8 +218,9 @@ class AggregationWorker:
     def _setup_signal_handlers(self):
         def signal_handler(sig, frame):
             self.logger.info(f"Received signal {sig}, shutting down AggregationWorker{self.agg_id}")
+            self.filter.should_exit = True
             try:
-                self.filter.close()
+                self.filter.stop()
             except Exception as e:
                 self.logger.error(f"Error closing filter: {e}")
         signal.signal(signal.SIGTERM, signal_handler)
@@ -227,7 +240,15 @@ class AggregationWorker:
         
         finally:
             self.logger.info(f"AggregationWorker {self.agg_id} cleaning up")
-            self.filter.close()
+            try:
+                self.filter.should_exit = True
+                self.filter.stop()
+            except Exception as e:
+                self.logger.error(f"Error stopping filter: {e}")
+            try:
+                self.filter.close()
+            except Exception as e:
+                self.logger.error(f"Error closing filter: {e}")
 
     
 def main():
