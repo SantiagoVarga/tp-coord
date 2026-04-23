@@ -82,6 +82,8 @@ Al momento de la evaluación y ejecución de las pruebas se **descartarán** o *
 
 ## Informe Técnico: Coordinación y Escalabilidad 
 
+Se redacta a continuación el siguiente informe el cual tiene como  fin explicar y justificar los cambios realizados al sistema provisto para cumplir con las especificaciones del enunciado y las características de un sistema distribuido.
+
 ### 1. Arquitectura de Coordinación entre Sum y Aggregation
 
 #### 1.1 Problema Original y Solución Implementada
@@ -294,22 +296,22 @@ def _send_final_top(self, client_id):
 
 #### 3.2 Escalabilidad por Número de Controles
 
-**Sum instances (SUM_AMOUNT):**
+**Sum instances:**
 - Comparten una data queue → carga balanceada automáticamente por RabbitMQ
 - Cada mensaje es consumido por UNA instancia (no duplicación)
 - Comparten (suscripción) control exchange → todos reciben EOF
-- Escalability: O(1) agregar una nueva Sum, no requiere reconfiguración 
+- Escalabilidad: O(1) agregar una nueva Sum, no requiere reconfiguración 
 
-**Aggregation instances (AGGREGATION_AMOUNT):**
+**Aggregation instances:**
 - Cada una recibe datos de UNA fruta específica (consistent hashing)
 - Si aumenta AGGREGATION_AMOUNT: nuevo hashing, datos se rebalancean automáticamente
-- Escalability: O(1) agregar una nueva Aggregation
+- Escalabilidad: O(1) agregar una nueva Aggregation
 
-**Join instancia (única):**
+**Join instance:**
 - Recibe datos de TODAS las Aggregations
 - Complejidad: O(AGGREGATION_AMOUNT) para consolidar tops
 - No es un cuello de botella real porque:
-  - El volumen de datos es TOP_SIZE × AGGREGATION_AMOUNT (muy pequeño para en este sistema)
+  - El volumen de datos es TOP_SIZE × AGGREGATION_AMOUNT. Estas son variables que no escalan tan rápido (no harían falta tantos aggregators y el TOP_SIZE no debería ser muya grande para que hacer un top de frutas tuviera sentido).
   - Solo se ejecuta una vez por cliente
   - Altamente paralelizable por cliente (cada cliente es independiente)
 
@@ -374,20 +376,7 @@ Raramente hay **contención de CPU** entre threads porque:
 - `self.lock.acquire()` también libera el GIL si hay contención
 - El procesamiento de cada mensaje es rápido (microsegundos)
 
-#### 4.3 Correctitud de Locks A Pesar del GIL
-
-```python
-with self.lock:
-    if client_id in self.finished_clients:
-        return
-    # ... actualizar diccionarios
-```
-
-Aunque el GIL existe, **no da thread-safety automáticamente** porque:
-- No existe "GIL por diccionario" - solo un GIL global
-- Un thread podría ser preempted entre verificar y actualizar
-
-**El lock implementado es correcto porque:**
+#### 4.3 Usos de locks en el sistema
 
 1. **Serializa acceso a estructuras mutables:**
    ```python
@@ -412,11 +401,11 @@ Aunque el GIL existe, **no da thread-safety automáticamente** porque:
 
 En lugar de threads CPU-bound (que sufren con GIL), implementamos **threads I/O-bound**:
 
-| Característica | CPU-Bound | I/O-Bound (Nuestro caso) |
+| Característica | CPU-Bound | I/O-Bound  |
 |---|---|---|
 | GIL Impact | Alto (competencia por ejecución) | Bajo (GIL liberado durante I/O) |
 | Caso de uso | Cálculos pesados | Esperar red/mensajes |
-| Escalabilidad | Limitada a #cores | Escalable (100+ threads posibles) |
+| Escalabilidad | Limitada a #cores | Muy escalable |
 | TP-Coord | ❌ | ✅ |
 
 Cada componente (Sum, Aggregation, Join) es fundamentalmente **I/O-bound**:
