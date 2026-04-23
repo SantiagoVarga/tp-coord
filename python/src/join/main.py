@@ -305,7 +305,6 @@ class JoinWorker:
                         self.filter.get_aggs_received_count(client_id) >= AGGREGATION_AMOUNT:
                         clients_to_send.append(client_id)
                         self.coordination_ready_by_client.pop(client_id, None)
-                self.logger.info(f"Monitoring completion: {len(self.coordination_ready_by_client)} clients ready, {len(clients_to_send)} clients to send final top")
 
             for client_id in clients_to_send:
                 try:
