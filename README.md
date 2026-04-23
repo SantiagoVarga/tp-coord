@@ -399,7 +399,7 @@ Raramente hay **contención de CPU** entre threads porque:
 
 #### 4.4 Por Qué Este Patrón es Superior
 
-En lugar de threads CPU-bound (que sufren con GIL), implementamos **threads I/O-bound**:
+En lugar de threads CPU-bound (que sufren con GIL), se implementó **threads I/O-bound**:
 
 | Característica | CPU-Bound | I/O-Bound  |
 |---|---|---|
