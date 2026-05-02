@@ -454,3 +454,27 @@ La implementación logra coordinación eficiente mediante:
 6. **Escalabilidad lineal** en clientes e instancias de procesamiento
 
 El sistema está preparado para cambios dinámicos en la configuración sin reimplentar la lógica de negocio.
+
+
+## Anexo: Correccion por falta de abstraccion en FruitItem
+
+### El problema
+
+En la primera entrega sucedia que, al cambiar el valor de comparacion interno de `FruitItem`, el sistema no lograba procesar correctamente el top pedido. Esto ocurria porque no se estaba ordenando el resultado final de forma agnostica a la implementacion de `__lt__ ` en `FruitItem`. El problema residia especificamente en el modulo `join`, donde no se encapsulaban los valores `amount` y `fruit` en `FruitItem` sino que se usaba una tupla estandar.
+
+### Los cambios realizados
+
+Para solucionar este problema se decidio encapsular los valores utilizados dentro de `FruitItem`. De este modo el ordenamiento se haria segun el valor de comparacion implementado en `__lt__` y no se romperia el encapsulamiento.
+
+            top_items = sorted(
+                (
+                    fruit_item.FruitItem(fruit, amount)
+                    for fruit, amount in amount_by_fruit.items()
+                ),
+                reverse=True,
+            )[:TOP_SIZE]
+            payload = [(item.fruit, item.amount) for item in top_items]
+
+### El resultado
+
+Luego de estos cambios minimos el sistema funciona ordenando los resultados segun la comparacion existente en `FruitItem` sin romper la abstraccion y el encapsulamiento de la clase.

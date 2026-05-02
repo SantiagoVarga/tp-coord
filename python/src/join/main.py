@@ -7,6 +7,7 @@ import time
 from threading import Lock
 
 from common.middleware import MessageMiddlewareQueueRabbitMQ
+from common import fruit_item
 from common.middleware.middleware import (MessageMiddlewareDisconnectedError)
 
 from common.message_protocol.internal import  Message, MessageType
@@ -74,11 +75,14 @@ class JoinFilter:
                 for fruit, amount in partial_top:
                     current_amount = amount_by_fruit.get(fruit, 0)
                     amount_by_fruit[fruit] = current_amount + amount
-            payload = sorted(
-                [(fruit, amount) for fruit, amount in amount_by_fruit.items()],
-                key=lambda fruit_record: (fruit_record[1], fruit_record[0]),
+            top_items = sorted(
+                (
+                    fruit_item.FruitItem(fruit, amount)
+                    for fruit, amount in amount_by_fruit.items()
+                ),
                 reverse=True,
             )[:TOP_SIZE]
+            payload = [(item.fruit, item.amount) for item in top_items]
         final_msg = self.message_handler.serialize_final_top(payload, client_id)
         try:
             self.output_queue.send(final_msg)

@@ -107,7 +107,7 @@ class AggregationFilter:
                 self.logger.warning(f"No fruit data for [client={client_id}]")
                 
 
-            top_items = sorted(fruit_list, key= lambda item: (item.amount, item.fruit), reverse=True)[:TOP_SIZE]
+            top_items = sorted(fruit_list, reverse=True)[:TOP_SIZE]
             payload = [(item.fruit, item.amount) for item in top_items]
 
         try:
